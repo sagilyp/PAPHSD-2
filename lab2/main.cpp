@@ -1,233 +1,329 @@
 #include <iostream>
 #include <chrono>
-#include <ctime>
-#include <cstring>
 #include <vector>
 #include <cmath>
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/rtc.h>
 #include <x86intrin.h>
+#include <ctime>
+#include <chrono>
 #include <numeric>
 #include <algorithm>
+#include <stdexcept>
+//#include <typeinfo>
+//#include <type_traits>
 
-constexpr int ITERATIONS = 1000000;
-constexpr int RTC_MEASUREMENTS = 100;  // Уменьшено с 1000 до 100
-constexpr int MAX_RTC_ATTEMPTS = 100;     // Увеличено с 10 до 100
-constexpr int RTC_POLL_DELAY = 10000; // 10ms задержка между проверками
+using namespace std;
+using namespace std::chrono;
 
-double tsc_per_ns = 0.0;
+constexpr size_t ITERATIONS = 1'000'000;
+constexpr size_t RTC_SAMPLES = 100;
+constexpr size_t CALIBRATION_SAMPLES = 100;
+constexpr int MAX_RTC_ATTEMPTS = 1000;
 
+struct TimerCharacteristics {
+    double resolution;       // Экспериментальное разрешение
+    double resolution_error; // Погрешность разрешения
+    double sys_accuracy;     // Точность по системному вызову
+    double a1;               // Время инициализации
+    double a2;               // Время возврата
+};
 
+class TimeProfiler {
+    double tsc_per_ns;
+    vector<clockid_t> posix_clocks;
+    
+    void calibrate_tsc() {
+        vector<double> ratios;
+        for (size_t i = 0; i < CALIBRATION_SAMPLES; ++i) {
+            timespec start, end;
+            uint64_t tsc1 = __rdtsc();
+            clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+            usleep(1000);
+            clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+            uint64_t tsc2 = __rdtsc();
+            
+            double ns = (end.tv_sec - start.tv_sec)*1e9 + (end.tv_nsec - start.tv_nsec);
+            ratios.push_back((tsc2 - tsc1) / ns);
+        }
+        tsc_per_ns = accumulate(ratios.begin(), ratios.end(), 0.0) / ratios.size();
+    }
 
-// Калибровка RDTSC
-void calibrate_rdtsc() {
-    constexpr int SAMPLES = 100;
-    std::vector<double> ratios;
-    ratios.reserve(SAMPLES);
+    double rdtsc_to_ns(uint64_t cycles) const {
+        return cycles / tsc_per_ns;
+    }
 
-    for(int i = 0; i < SAMPLES; ++i) {
-        struct timespec start, end;
-        uint64_t tsc1 = __rdtsc();
-        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-        usleep(10000); // 10 ms
-        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
-        uint64_t tsc2 = __rdtsc();
+    template<typename Clock>
+    TimerCharacteristics measure_cpp_clock() {
+        vector<uint64_t> deltas;
+        vector<uint64_t> a1_samples;
+        vector<uint64_t> a2_samples;
+
+        for (size_t i = 0; i < ITERATIONS; ++i) {
+            uint64_t t1 = __rdtsc();
+            auto now = Clock::now();
+            uint64_t t2 = __rdtsc();
+            auto now2 = Clock::now();
+            uint64_t t3 = __rdtsc();
+            
+            deltas.push_back(t2 - t1);
+            a1_samples.push_back(t2 - t1);
+            a2_samples.push_back(t3 - t2);
+
+            asm volatile("" : : "r"(now), "r"(now2) : "memory");
+        }
+
+        double mean = accumulate(deltas.begin(), deltas.end(), 0.0) / ITERATIONS;
+        double sq_sum = inner_product(deltas.begin(), deltas.end(), deltas.begin(), 0.0);
+        double stdev = sqrt(sq_sum/ITERATIONS - mean*mean);
+
+        // Получение системной точности через POSIX
+        constexpr clockid_t clk = 
+            is_same_v<Clock, system_clock> ? CLOCK_REALTIME :
+            is_same_v<Clock, steady_clock> ? CLOCK_MONOTONIC :
+            CLOCK_MONOTONIC_RAW;
+            
+        timespec res;
+        clock_getres(clk, &res);
+        double sys_acc = res.tv_sec*1e9 + res.tv_nsec;
+
+        // Расчет A1/A2
+        double a1 = accumulate(a1_samples.begin(), a1_samples.end(), 0.0) / ITERATIONS;
+        double a2 = accumulate(a2_samples.begin(), a2_samples.end(), 0.0) / ITERATIONS;
+
+        return {
+            rdtsc_to_ns(mean),
+            rdtsc_to_ns(stdev),
+            sys_acc,
+            rdtsc_to_ns(a1),
+            rdtsc_to_ns(a2)
+        };
+    }
+
+public:
+    TimeProfiler() {
+        calibrate_tsc();
+        posix_clocks = {
+            CLOCK_REALTIME, 
+            CLOCK_MONOTONIC,
+            CLOCK_MONOTONIC_RAW,
+            CLOCK_PROCESS_CPUTIME_ID,
+            CLOCK_THREAD_CPUTIME_ID
+        };
+    }
+
+    TimerCharacteristics measure_rtc() {
+        int fd = open("/dev/rtc0", O_RDONLY);
+        if (fd < 0) throw runtime_error("RTC open failed");
+        vector<uint64_t> a1_samples;
+        vector<uint64_t> a2_samples;
+        vector<uint64_t> deltas;
+        rtc_time prev, curr;
         
-        double ns = (end.tv_sec - start.tv_sec)*1e9 + 
-                   (end.tv_nsec - start.tv_nsec);
-        if(ns > 0) {
-            ratios.push_back((tsc2 - tsc1)/ns);
+        if (ioctl(fd, RTC_RD_TIME, &prev) < 0) {
+            close(fd);
+            throw runtime_error("RTC read failed");
+        }
+
+        for (size_t i = 0; i < RTC_SAMPLES; ++i) {
+            int attempts = 0;
+                    // Измерение A1
+            uint64_t t1 = __rdtsc();
+            if (ioctl(fd, RTC_RD_TIME, &curr) < 0) {
+                close(fd);
+                throw runtime_error("RTC read failed");
+            }
+            uint64_t t2 = __rdtsc();
+            a1_samples.push_back(t2 - t1);
+
+            // Измерение A2
+            uint64_t t3 = __rdtsc();
+            if (ioctl(fd, RTC_RD_TIME, &prev) < 0) { // Фиктивный вызов для A2
+                close(fd);
+                throw runtime_error("RTC read failed");
+            }
+            uint64_t t4 = __rdtsc();
+            a2_samples.push_back(t4 - t3);
+            uint64_t t5 = __rdtsc();
+            do {
+                if (ioctl(fd, RTC_RD_TIME, &curr) < 0) {
+                    close(fd);
+                    throw runtime_error("RTC read failed");
+                }
+                if (++attempts > MAX_RTC_ATTEMPTS) {
+                    close(fd);
+                    throw runtime_error("RTC timeout");
+                }
+                usleep(1000);
+            } while (memcmp(&prev, &curr, sizeof(rtc_time)) == 0);
+
+            uint64_t t6 = __rdtsc();
+            deltas.push_back(t6 - t5);
+            prev = curr;
+        }
+        close(fd);
+
+        double mean = accumulate(deltas.begin(), deltas.end(), 0.0) / deltas.size();
+        double sq_sum = inner_product(deltas.begin(), deltas.end(), deltas.begin(), 0.0);
+        double stdev = sqrt(sq_sum/deltas.size() - mean*mean);
+        double a1 = accumulate(a1_samples.begin(), a1_samples.end(), 0.0) / a1_samples.size() / tsc_per_ns;
+        double a2 = accumulate(a2_samples.begin(), a2_samples.end(), 0.0) / a2_samples.size() / tsc_per_ns;
+        return {
+            rdtsc_to_ns(mean),
+            rdtsc_to_ns(stdev),
+            1e6, // 1 ms для RTC
+            a1, a2 // A1/A2 не измеряем для RTC
+        };
+    }
+
+    TimerCharacteristics measure_posix_clock(clockid_t clk) {
+        // Измерение системной точности
+        timespec res;
+        clock_getres(clk, &res);
+        double sys_acc = res.tv_sec*1e9 + res.tv_nsec;
+
+        // Измерение разрешения
+        vector<uint64_t> deltas;
+        for (size_t i = 0; i < ITERATIONS; ++i) {
+            timespec t1, t2;
+            uint64_t s1 = __rdtsc();
+            clock_gettime(clk, &t1);
+            clock_gettime(clk, &t2);
+            uint64_t s2 = __rdtsc();
+            
+            deltas.push_back(rdtsc_to_ns(s2 - s1));
+        }
+
+        // Статистика
+        double mean = accumulate(deltas.begin(), deltas.end(), 0.0) / ITERATIONS;
+        double sq_sum = inner_product(deltas.begin(), deltas.end(), deltas.begin(), 0.0);
+        double stdev = sqrt(sq_sum/ITERATIONS - mean*mean);
+
+        // Измерение A1/A2
+        vector<pair<uint64_t, uint64_t>> ab_samples;
+        for (size_t i = 0; i < ITERATIONS; ++i) {
+            uint64_t t1 = __rdtsc();
+            timespec dummy;
+            clock_gettime(clk, &dummy);
+            uint64_t t2 = __rdtsc();
+            clock_gettime(clk, &dummy);
+            uint64_t t3 = __rdtsc();
+            ab_samples.emplace_back(t2 - t1, t3 - t2);
+        }
+
+        double a = accumulate(ab_samples.begin(), ab_samples.end(), 0.0,
+            [this](double sum, auto& p) { return sum + rdtsc_to_ns(p.first); }) / ITERATIONS;
+        
+        double b = accumulate(ab_samples.begin(), ab_samples.end(), 0.0,
+            [this](double sum, auto& p) { return sum + rdtsc_to_ns(p.second); }) / ITERATIONS;
+
+        return {mean, stdev, sys_acc, a, b};
+    }
+
+
+    TimerCharacteristics measure_rdtsc() {
+        vector<uint64_t> deltas;
+        vector<uint64_t> a1_samples;
+        vector<uint64_t> a2_samples;
+        for (size_t i = 0; i < ITERATIONS; ++i) {
+            uint64_t t1 = __rdtsc();
+            uint64_t t2 = __rdtsc();
+            uint64_t t3 = __rdtsc();
+            deltas.push_back(t2 - t1);
+            a1_samples.push_back(t2 - t1);
+            a2_samples.push_back(t3 - t2);
+        }
+
+        double mean = accumulate(deltas.begin(), deltas.end(), 0.0) / ITERATIONS;
+        double sq_sum = inner_product(deltas.begin(), deltas.end(), deltas.begin(), 0.0);
+        double stdev = sqrt(sq_sum/ITERATIONS - mean*mean);
+        double a1 = accumulate(a1_samples.begin(), a1_samples.end(), 0.0) / ITERATIONS;
+        double a2 = accumulate(a2_samples.begin(), a2_samples.end(), 0.0) / ITERATIONS;
+
+        return {
+            mean / tsc_per_ns,
+            stdev / tsc_per_ns,
+            1.0 / tsc_per_ns, // Теоретическая точность
+            a1/tsc_per_ns,
+            a2/tsc_per_ns              // Нет системных вызовов
+        };
+    }
+
+    void print_table() {
+        cout << "| Timer Name               | Resolution (ns) | Error (ns) | Sys Accuracy (ns) | A1 (ns) | A2 (ns) |\n";
+        cout << "|--------------------------|-----------------|------------|--------------------|---------|---------|\n";
+        
+        try {
+            auto rtc = measure_rtc();
+            printf("| %-24s | %9.1f      | %7.1f    | %12.1f       | %6.1f   | %6.1f   |\n",
+                   "RTC", rtc.resolution, rtc.resolution_error, rtc.sys_accuracy, rtc.a1, rtc.a2);
+        } catch (const exception& e) {
+            cerr << "RTC measurement failed: " << e.what() << endl;
+        }
+
+        try {
+            auto sys = measure_cpp_clock<std::chrono::_V2::system_clock>();
+            printf("| %-24s | %9.1f      | %7.1f    | %12.1f       | %6.1f  | %6.1f   |\n",
+                       "system_clock", sys.resolution, sys.resolution_error, sys.sys_accuracy, sys.a1, sys.a2);
+        }catch (const exception& e) {
+            cerr << "system_clock measurement failed: " << e.what() << endl;
+        }
+    
+            try {
+                auto steady = measure_cpp_clock<steady_clock>();
+                printf("| %-24s | %9.1f      | %7.1f    | %12.1f       | %6.1f    | %6.1f    |\n",
+                       "steady_clock", steady.resolution, steady.resolution_error, steady.sys_accuracy, steady.a1, steady.a2);
+            }catch (const exception& e) {
+                cerr << "steady_clock measurement failed: " << e.what() << endl;
+            }
+    
+            try {
+                auto hrc = measure_cpp_clock<high_resolution_clock>();
+                printf("| %-24s | %9.1f      | %7.1f    | %12.1f       | %6.1f    | %6.1f    |\n",
+                       "high_resolution_clock", hrc.resolution, hrc.resolution_error, hrc.sys_accuracy, hrc.a1, hrc.a2);
+            }catch (const exception& e) {
+                cerr << "high_resolution_clock measurement failed: " << e.what() << endl;
+            }
+        
+
+        for (auto clk : posix_clocks) {
+            try {
+                auto res = measure_posix_clock(clk);
+                const char* name = "";
+                switch(clk) {
+                    case CLOCK_REALTIME: name = "CLOCK_REALTIME"; break;
+                    case CLOCK_MONOTONIC: name = "CLOCK_MONOTONIC"; break;
+                    case CLOCK_MONOTONIC_RAW: name = "CLOCK_MONOTONIC_RAW"; break;
+                    case CLOCK_PROCESS_CPUTIME_ID: name = "CLOCK_PROCESS_CPUTIME"; break;
+                    case CLOCK_THREAD_CPUTIME_ID: name = "CLOCK_THREAD_CPUTIME"; break;
+                }
+                printf("| %-24s | %9.1f      | %7.1f    | %12.1f       | %6.1f | %6.1f |\n",
+                       name, res.resolution, res.resolution_error, res.sys_accuracy, res.a1, res.a2);
+            } catch (...) {
+                cerr << "Measurement failed for clock: " << clk << endl;
+            }
+        }
+
+        try {
+            auto rdtsc_res = measure_rdtsc();
+            printf("| %-24s | %9.1f      | %7.1f    | %12.1f       | %6.1f    | %6.1f    |\n",
+                   "RDTSC", rdtsc_res.resolution, rdtsc_res.resolution_error, rdtsc_res.sys_accuracy, rdtsc_res.a1, rdtsc_res.a2);
+        } catch (...) {
+            cerr << "RDTSC measurement failed" << endl;
         }
     }
-    
-    tsc_per_ns = std::accumulate(ratios.begin(), ratios.end(), 0.0) / ratios.size();
-}
-
-void measure_rtc() {
-    int fd = open("/dev/rtc", O_RDONLY); // Попробуйте /dev/rtc вместо /dev/rtc0
-    if(fd < 0) {
-        std::cerr << "Failed to open RTC: " << strerror(errno) << "\n";
-        return;
-    }
-    std::vector<long> deltas;
-    deltas.reserve(RTC_MEASUREMENTS);
-    rtc_time prev, curr;
-    if(ioctl(fd, RTC_RD_TIME, &prev) < 0) {
-        std::cerr << "Initial RTC read failed: " << strerror(errno) << "\n";
-        close(fd);
-        return;
-    }
-    for(int i = 0; i < RTC_MEASUREMENTS; ++i) {
-        int attempts = 0;
-        auto t1 = std::chrono::high_resolution_clock::now();   
-        do {
-            if(ioctl(fd, RTC_RD_TIME, &curr) < 0) {
-                std::cerr << "RTC read error: " << strerror(errno) << "\n";
-                close(fd);
-                return;
-            }
-            
-            if(++attempts > MAX_RTC_ATTEMPTS) {
-                std::cerr << "RTC timeout at measurement " << i << "\n";
-                close(fd);
-                return;
-            }
-            usleep(RTC_POLL_DELAY); // Добавлена задержка
-            
-        } while(memcmp(&prev, &curr, sizeof(rtc_time)) == 0);
-        auto t2 = std::chrono::high_resolution_clock::now();
-        deltas.push_back(
-            std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()
-        );
-        prev = curr; // Обновляем предыдущее значение
-    }
-    close(fd);
-    // Статистика
-    long sum = 0;
-    for(auto d : deltas) sum += d;
-    double mean = sum / (double)deltas.size();
-    double variance = 0;
-    for(auto d : deltas) variance += (d - mean)*(d - mean);
-    double stddev = sqrt(variance/deltas.size());
-    std::cout << "RTC Resolution:\n";
-    std::cout << "  Mean access time: " << mean << " μs\n";
-    std::cout << "  Std deviation:   " << stddev << " μs\n";
-}
-
-// Шаблон для измерения C++ clocks
-template<typename Clock>
-void measure_cpp_clock(const char* name) {
-    std::vector<typename Clock::duration> deltas;
-    deltas.reserve(ITERATIONS);
-
-    auto start = Clock::now();
-    for(int i = 0; i < ITERATIONS; ++i) {
-        auto t1 = Clock::now();
-        auto t2 = Clock::now();
-        deltas.push_back(t2 - t1);
-    }
-
-    // Конвертация в наносекунды
-    long long sum = 0;
-    for(auto d : deltas) {
-        sum += std::chrono::duration_cast<std::chrono::nanoseconds>(d).count();
-    }
-    double mean = sum / (double)ITERATIONS;
-    
-    double variance = 0;
-    for(auto d : deltas) {
-        double ns = std::chrono::duration_cast<std::chrono::nanoseconds>(d).count();
-        variance += (ns - mean)*(ns - mean);
-    }
-    double stddev = sqrt(variance/ITERATIONS);
-    
-    std::cout << "\n" << name << ":\n";
-    std::cout << "  Resolution:      " << mean << " ns\n";
-    std::cout << "  Std deviation:   " << stddev << " ns\n";
-}
-
-// Измерение clock_gettime
-void measure_posix_clock(clockid_t clk_id, const char* name) {
-    struct timespec tp;
-    std::vector<long> deltas;
-    deltas.reserve(ITERATIONS);
-    for(int i = 0; i < ITERATIONS; ++i) {
-        timespec t1, t2;
-        clock_gettime(clk_id, &t1);
-        clock_gettime(clk_id, &t2);
-        
-        deltas.push_back((t2.tv_sec - t1.tv_sec)*1000000000L + 
-                        (t2.tv_nsec - t1.tv_nsec));
-    }
-    long sum = 0;
-    for(auto d : deltas) sum += d;
-    double mean = sum / (double)ITERATIONS;
-    double variance = 0;
-    for(auto d : deltas) variance += (d - mean)*(d - mean);
-    double stddev = sqrt(variance/ITERATIONS);
-    std::cout << "\n" << name << ":\n";
-    std::cout << "  Resolution:      " << mean << " ns\n";
-    std::cout << "  Std deviation:   " << stddev << " ns\n";
-}
-
-// Измерение RDTSC
-void measure_rdtsc() {
-    // Калибровка
-    auto t1 = std::chrono::high_resolution_clock::now();
-    uint64_t start = __rdtsc();
-    usleep(100000); // 100 ms
-    uint64_t end = __rdtsc();
-    auto t2 = std::chrono::high_resolution_clock::now();
-    double ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
-    double cycles_per_ns = (end - start) / ns;
-    // Измерение разрешения
-    std::vector<uint64_t> deltas;
-    for(int i = 0; i < ITERATIONS; ++i) {
-        uint64_t t1 = __rdtsc();
-        uint64_t t2 = __rdtsc();
-        deltas.push_back(t2 - t1);
-    }
-    uint64_t sum = 0;
-    for(auto d : deltas) sum += d;
-    double mean = sum / (double)ITERATIONS;
-    
-    double variance = 0;
-    for(auto d : deltas) variance += (d - mean)*(d - mean);
-    double stddev = sqrt(variance/ITERATIONS);
-    std::cout << "\nRDTSC:\n";
-    std::cout << "  Cycles per ns:   " << cycles_per_ns << "\n";
-    std::cout << "  Resolution:      " << mean/cycles_per_ns << " ns\n";
-    std::cout << "  Std deviation:   " << stddev/cycles_per_ns << " ns\n";
-}
-
-// Измерение времени системного вызова
-template<clockid_t CLK>
-void measure_syscall_overhead() {
-    constexpr int N = 1000000;
-    std::vector<uint64_t> deltas(N);
-
-    for(int i = 0; i < N; ++i) {
-        uint64_t t1 = __rdtsc();
-        timespec ts;
-        clock_gettime(CLK, &ts);
-        uint64_t t2 = __rdtsc();
-        deltas[i] = t2 - t1;
-    }
-    
-    // Расчет медианы
-    std::nth_element(deltas.begin(), deltas.begin()+N/2, deltas.end());
-    double median_cycles = deltas[N/2];
-    double median_ns = median_cycles / tsc_per_ns;
-    
-    std::cout << "\nSyscall overhead for CLOCK_" 
-              << (CLK == CLOCK_REALTIME ? "REALTIME" : "MONOTONIC")
-              << ": " << median_ns << " ns\n";
-}
+};
 
 int main() {
-    std::cout << "Calibrating RDTSC...\n";
-    calibrate_rdtsc();
-    // Измерение C++ clocks
-    measure_cpp_clock<std::chrono::system_clock>("system_clock");
-    measure_cpp_clock<std::chrono::steady_clock>("steady_clock");
-    measure_cpp_clock<std::chrono::high_resolution_clock>("high_resolution_clock");
-    
-    // Измерение POSIX clocks
-    measure_posix_clock(CLOCK_REALTIME, "CLOCK_REALTIME");
-    measure_posix_clock(CLOCK_MONOTONIC, "CLOCK_MONOTONIC");
-    measure_posix_clock(CLOCK_MONOTONIC_RAW, "CLOCK_MONOTONIC_RAW");
-    measure_posix_clock(CLOCK_PROCESS_CPUTIME_ID, "CLOCK_PROCESS_CPUTIME_ID");
-    
-    // Измерение RTC (требует прав root)
-    measure_rtc();
-    
-    // Измерение RDTSC
-    measure_rdtsc();
-    measure_syscall_overhead<CLOCK_REALTIME>();
-    measure_syscall_overhead<CLOCK_MONOTONIC>();
-    measure_syscall_overhead<CLOCK_MONOTONIC_RAW>();
-    measure_syscall_overhead<CLOCK_PROCESS_CPUTIME_ID>();
+    try {
+        TimeProfiler profiler;
+        profiler.print_table();
+    } catch (const exception& e) {
+        cerr << "Fatal error: " << e.what() << endl;
+        return 1;
+    }
     return 0;
 }

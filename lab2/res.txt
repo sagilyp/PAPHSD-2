@@ -1,0 +1,10 @@
+# Timer                A1 (ns)    A2 (ns)
+CLOCK-REALTIME         19.5       18.6
+CLOCK-MONOTONIC        18.8       17.8
+CLOCK-MONOTONIC-RAW    17.9       16.9
+CLOCK-PROCESS-CPUTIME  192.3      193.0
+system-clock           21.5       21.5
+steady-clock           21.1       20.7
+high-resolution-clock  20.7       20.3
+RDTSC                  7.4        7.4
+#RTC					   509488.1	  502107.4
