@@ -1,0 +1,4 @@
+# Mode     Comp_O2  Comp_Oz  Run_O2   Run_Oz   Size_O2  Size_Oz
+noLTO      0.528    0.520    10.005   10.586   18       19
+thinLTO    0.556    0.580    9.838    9.960    18       18
+fullLTO    0.568    0.543    9.739    9.971    21       17

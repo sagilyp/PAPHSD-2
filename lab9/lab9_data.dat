@@ -1,0 +1,141 @@
+ 1  # Часть A: квадратичные уравнения
+ 2  # compiler   mode          bound    omp    time
+ 3  -O0    BASELINE     var    NO    0.470883
+ 4  -O0    BASELINE     var    YES   0.116705
+ 5  -O0    BASELINE     const  NO    0.475072
+ 6  -O0    BASELINE     const  YES   0.119075
+ 7  -O0    CONST_ALL    var    NO    0.486534
+ 8  -O0    CONST_ALL    var    YES   0.126722
+ 9  -O0    CONST_ALL    const  NO    0.483323
+10  -O0    CONST_ALL    const  YES   0.118675
+11  -O0    VOLATILE_ALL var    NO    0.485202
+12  -O0    VOLATILE_ALL var    YES   0.116368
+13  -O0    VOLATILE_ALL const  NO    0.485364
+14  -O0    VOLATILE_ALL const  YES   0.124180
+15  -O0    RESTRICT_ALL var    NO    0.482740
+16  -O0    RESTRICT_ALL var    YES   0.122718
+17  -O0    RESTRICT_ALL const  NO    0.484462
+18  -O0    RESTRICT_ALL const  YES   0.130085
+19  -O1    BASELINE     var    NO    0.0522144
+20  -O1    BASELINE     var    YES   0.0251048
+21  -O1    BASELINE     const  NO    0.0717778
+22  -O1    BASELINE     const  YES   0.0258026
+23  -O1    CONST_ALL    var    NO    0.0658764
+24  -O1    CONST_ALL    var    YES   0.0244069
+25  -O1    CONST_ALL    const  NO    0.0714630
+26  -O1    CONST_ALL    const  YES   0.0252078
+27  -O1    VOLATILE_ALL var    NO    0.0868489
+28  -O1    VOLATILE_ALL var    YES   0.0374718
+29  -O1    VOLATILE_ALL const  NO    0.0823535
+30  -O1    VOLATILE_ALL const  YES   0.0304658
+31  -O1    RESTRICT_ALL var    NO    0.0735732
+32  -O1    RESTRICT_ALL var    YES   0.0243824
+33  -O1    RESTRICT_ALL const  NO    0.0698553
+34  -O1    RESTRICT_ALL const  YES   0.0289920
+35  -O2    BASELINE     var    NO    0.0484383
+36  -O2    BASELINE     var    YES   0.0239759
+37  -O2    BASELINE     const  NO    0.0624644
+38  -O2    BASELINE     const  YES   0.0269251
+39  -O2    CONST_ALL    var    NO    0.0573057
+40  -O2    CONST_ALL    var    YES   0.0264781
+41  -O2    CONST_ALL    const  NO    0.0577907
+42  -O2    CONST_ALL    const  YES   0.0379626
+43  -O2    VOLATILE_ALL var    NO    0.0867538
+44  -O2    VOLATILE_ALL var    YES   0.0249516
+45  -O2    VOLATILE_ALL const  NO    0.0829498
+46  -O2    VOLATILE_ALL const  YES   0.0263242
+47  -O2    RESTRICT_ALL var    NO    0.0601380
+48  -O2    RESTRICT_ALL var    YES   0.0285015
+49  -O2    RESTRICT_ALL const  NO    0.0671778
+50  -O2    RESTRICT_ALL const  YES   0.0325798
+51  -O3    BASELINE     var    NO    0.0507948
+52  -O3    BASELINE     var    YES   0.0232018
+53  -O3    BASELINE     const  NO    0.0551122
+54  -O3    BASELINE     const  YES   0.0343237
+55  -O3    CONST_ALL    var    NO    0.0596695
+56  -O3    CONST_ALL    var    YES   0.0299710
+57  -O3    CONST_ALL    const  NO    0.0647705
+58  -O3    CONST_ALL    const  YES   0.0263798
+59  -O3    VOLATILE_ALL var    NO    0.0840017
+60  -O3    VOLATILE_ALL var    YES   0.0240499
+61  -O3    VOLATILE_ALL const  NO    0.0834127
+62  -O3    VOLATILE_ALL const  YES   0.0261219
+63  -O3    RESTRICT_ALL var    NO    0.0579810
+64  -O3    RESTRICT_ALL var    YES   0.0342987
+65  -O3    RESTRICT_ALL const  NO    0.0621913
+66  -O3    RESTRICT_ALL const  YES   0.0258989
+67  -Ofast BASELINE     var    NO    0.0486733
+68  -Ofast BASELINE     var    YES   0.0233148
+69  -Ofast BASELINE     const  NO    0.0588285
+70  -Ofast BASELINE     const  YES   0.0272262
+71  -Ofast CONST_ALL    var    NO    0.0633615
+72  -Ofast CONST_ALL    var    YES   0.0290869
+73  -Ofast CONST_ALL    const  NO    0.0648039
+74  -Ofast CONST_ALL    const  YES   0.0283121
+75  -Ofast VOLATILE_ALL var    NO    0.0801266
+76  -Ofast VOLATILE_ALL var    YES   0.0275918
+77  -Ofast VOLATILE_ALL const  NO    0.0823788
+78  -Ofast VOLATILE_ALL const  YES   0.0258330
+79  -Ofast RESTRICT_ALL var    NO    0.0588697
+80  -Ofast RESTRICT_ALL var    YES   0.0318459
+81  -Ofast RESTRICT_ALL const  NO    0.0621532
+82  -Ofast RESTRICT_ALL const  YES   0.0252778
+83  -Og    BASELINE     var    NO    0.313153
+84  -Og    BASELINE     var    YES   0.066283
+85  -Og    BASELINE     const  NO    0.322102
+86  -Og    BASELINE     const  YES   0.0763105
+87  -Og    CONST_ALL    var    NO    0.315117
+88  -Og    CONST_ALL    var    YES   0.0733871
+89  -Og    CONST_ALL    const  NO    0.320342
+90  -Og    CONST_ALL    const  YES   0.0885079
+91  -Og    VOLATILE_ALL var    NO    0.309011
+92  -Og    VOLATILE_ALL var    YES   0.0737893
+93  -Og    VOLATILE_ALL const  NO    0.308816
+94  -Og    VOLATILE_ALL const  YES   0.0841769
+95  -Og    RESTRICT_ALL var    NO    0.318431
+96  -Og    RESTRICT_ALL var    YES   0.0756918
+97  -Og    RESTRICT_ALL const  NO    0.319249
+98  -Og    RESTRICT_ALL const  YES   0.0801344
+99  -Os    BASELINE     var    NO    0.287595
+100 -Os    BASELINE     var    YES   0.071174
+101 -Os    BASELINE     const  NO    0.297705
+102 -Os    BASELINE     const  YES   0.0648385
+103 -Os    CONST_ALL    var    NO    0.318612
+104 -Os    CONST_ALL    var    YES   0.0772107
+105 -Os    CONST_ALL    const  NO    0.317563
+106 -Os    CONST_ALL    const  YES   0.0768522
+107 -Os    VOLATILE_ALL var    NO    0.315659
+108 -Os    VOLATILE_ALL var    YES   0.0865852
+109 -Os    VOLATILE_ALL const  NO    0.314155
+110 -Os    VOLATILE_ALL const  YES   0.0782784
+111 -Os    RESTRICT_ALL var    NO    0.304936
+112 -Os    RESTRICT_ALL var    YES   0.0745648
+113 -Os    RESTRICT_ALL const  NO    0.305094
+114 -Os    RESTRICT_ALL const  YES   0.0811949
+115 -Oz    BASELINE     var    NO    0.301222
+116 -Oz    BASELINE     var    YES   0.0776135
+117 -Oz    BASELINE     const  NO    0.311627
+118 -Oz    BASELINE     const  YES   0.0796629
+119 -Oz    CONST_ALL    var    NO    0.311877
+120 -Oz    CONST_ALL    var    YES   0.0849346
+121 -Oz    CONST_ALL    const  NO    0.311870
+122 -Oz    CONST_ALL    const  YES   0.0913983
+123 -Oz    VOLATILE_ALL var    NO    0.318017
+124 -Oz    VOLATILE_ALL var    YES   0.0787287
+125 -Oz    VOLATILE_ALL const  NO    0.316517
+126 -Oz    VOLATILE_ALL const  YES   0.0772910
+127 -Oz    RESTRICT_ALL var    NO    0.296170
+128 -Oz    RESTRICT_ALL var    YES   0.0789196
+129 -Oz    RESTRICT_ALL const  NO    0.294605
+130 -Oz    RESTRICT_ALL const  YES   0.0903484
+
+131 # Часть B: бесполезная сумма
+132 # compiler   sum_non_volatile   sum_volatile
+133 -O0    0.431334   0.436279
+134 -O1    0.392448   0.446375
+135 -O2    0.197630   0.446905
+136 -O3    0.197815   0.457334
+137 -Ofast 0.109547   0.445445
+138 -Og    0.391175   0.447779
+139 -Os    0.193773   0.440291
+140 -Oz    0.194406   0.442284
