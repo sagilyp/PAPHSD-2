@@ -1,0 +1,3 @@
+// file #05780 — placeholder
+int dummy_05780 = 05780;
+// changed at 1749211069

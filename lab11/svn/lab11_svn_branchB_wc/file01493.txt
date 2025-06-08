@@ -1,0 +1,2 @@
+// file #01493 — placeholder
+int dummy_01493 = 01493;
